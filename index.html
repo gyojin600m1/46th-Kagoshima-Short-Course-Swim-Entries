@@ -212,9 +212,6 @@ select{
   background:var(--border);box-shadow:0 0 0 3px var(--bg)}
 .tlr .tt{font-size:13.5px;font-weight:700;overflow-wrap:anywhere}
 .tlr .tn{font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.6;overflow-wrap:anywhere}
-.tlr.fuel{border-color:rgba(255,204,102,.35)}
-.tlr.fuel::before{background:var(--gold)}
-.tlr.fuel .tt{color:var(--gold)}
 .tlr.call{border-color:rgba(90,160,255,.35)}
 .tlr.call::before{background:var(--accent)}
 .tlr.call .tt{color:var(--accent)}
@@ -259,6 +256,8 @@ select{
 .dpnext .nx{font-size:17px;font-weight:800;margin-top:2px;line-height:1.35;overflow-wrap:anywhere}
 .dpnext .nx b{color:var(--gold);margin-right:8px;font-variant-numeric:tabular-nums}
 .dpnext .tn{font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.6}
+.dpnext .nr{font-size:12.5px;margin-top:7px;padding-top:7px;border-top:1px dashed var(--border);line-height:1.5;overflow-wrap:anywhere}
+.dpnext .nr b{color:var(--gold);font-variant-numeric:tabular-nums}
 .dpnext button{margin-top:8px;min-height:44px;padding:0 16px;border-radius:10px;border:0;background:var(--accent);color:#04203f;font-weight:800;cursor:pointer}
 .note.dpw{border-left-color:var(--gold);color:var(--gold)}
 details.dpd{background:var(--card);border:1px solid var(--border);border-radius:12px;margin-bottom:10px;padding:0 12px}
@@ -299,6 +298,7 @@ details.dpd .tn{font-size:12px;color:var(--muted);line-height:1.7;margin:2px 0 4
   .tlr{break-inside:avoid}
   .tlr .tt,.tlr .ti,.tlr .tn,.dpnext .nx,.dpnext .lb{color:#111!important}
   .tl::before{background:#bbb}
+  .pill{background:#fff!important;color:#111!important;border:1px solid #999!important}
 }
 .sw.hl{box-shadow:inset 0 0 0 1px rgba(255,204,102,.45)}
 .ln.hl{box-shadow:inset 0 0 0 1px rgba(255,204,102,.45)}
@@ -1561,17 +1561,6 @@ function clockOf(e){
 }
 const clockText = c => fmtm(c.t) + (c.est ? "ごろ" : "〜");
 
-/* その選手のそのエントリーが、予想で第何組の何レーンになるか */
-function seatOf(e){
-  const r = RACE_BY_NO.get((e.programNos||[])[0]); if(!r) return null;
-  const heats = buildHeats(raceList(r));
-  for(let i=0;i<heats.length;i++)
-    for(const [lane, x] of heats[i].seat)
-      if(x === e || (x.id && e.id && x.id === e.id && x.programNos?.[0] === e.programNos?.[0]))
-        return {heat:i+1, lane:lane, of:heats.length};
-  return null;
-}
-
 /* ===========================================================
    当日プラン（meta.dayPlan と program[].startTime があるときだけ）
    選んだ選手（兄弟・姉妹はまとめて最大4人）のレース時刻＝予想の組の泳ぎ出しから、
@@ -1579,6 +1568,9 @@ function seatOf(e){
    ・食事の時刻は公式予定ではなく仮置き。朝食は準備の約2時間前、補食は出番の約1時間前（直前に食べていなければ・1回まで）、
      昼食は出番と集合を避けて次の集合まで約2時間あくところ。全部食べる必要はない。
    ・チェック・自分で入れた時刻やメモ・補食の食品・持ち物は この端末（localStorage）だけに保存。外部には送らない。
+   ・以前の dayPlan.fuel / fuelNote / shortGapNote / dayStart（120・60・30分前の補食）は使わない（1日ナビのルールに統一した）。
+   ・画面は部分ごと（dp-head / next / info / in / tl / rest）に描き直す。全体を描き直すと、
+     入力欄から指を離した直後のタップが消えたり、時刻の入力中に入力欄が閉じたりするため。
    =========================================================== */
 const DP_FOODS = [
   ["jelly","🥤","糖質補給用のゼリー飲料","子ども向けの物を。対象年齢・カフェイン・アレルゲンの表示を確認。1袋を全部飲む必要はない。"],
@@ -1625,31 +1617,48 @@ const DP_MEAL_NOTE = "食事・補食の時刻は公式の予定ではなく、�
 
 /* ---------- 保存（この端末だけ・大会ごと） ---------- */
 const DPS_KEY = "dayplan:" + ((META.counter && META.counter.ns) || META.title || "meet");
+const dpId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const DPS = (() => {
   const b = {keys:[], done:{}, my:{wake:"", arrival:"", breakfast:"", notes:"", gather:{}, custom:[]}, foods:{}, kit:{}, memo:""};
+  const str = v => typeof v === "string";
+  const obj = v => v && typeof v === "object" && !Array.isArray(v);
+  const flags = v => Object.fromEntries(Object.entries(obj(v) ? v : {}).filter(([, x]) => x === true));
   try{
     const v = JSON.parse(localStorage.getItem(DPS_KEY) || "null");
-    if(v && typeof v === "object"){
-      if(Array.isArray(v.keys)) b.keys = v.keys.filter(k => typeof k === "string").slice(0, 4);
-      for(const k of ["done","foods","kit"]) if(v[k] && typeof v[k] === "object" && !Array.isArray(v[k])) b[k] = v[k];
-      if(v.my && typeof v.my === "object"){
-        for(const k of ["wake","arrival","breakfast","notes"]) if(typeof v.my[k] === "string") b.my[k] = v.my[k];
-        if(v.my.gather && typeof v.my.gather === "object") b.my.gather = v.my.gather;
-        if(Array.isArray(v.my.custom)) b.my.custom = v.my.custom
-          .filter(c => c && typeof c.time === "string" && typeof c.text === "string").slice(0, 30);
+    if(obj(v)){
+      // データを作り直して見つからなくなった選手は外す（残すと「＋ 兄弟・姉妹」で足せなくなる）
+      if(Array.isArray(v.keys)) b.keys = v.keys.filter(k => str(k) && SWL.some(s => KEY(s) === k)).slice(0, 4);
+      b.done = flags(v.done); b.kit = flags(v.kit);
+      if(obj(v.foods)) for(const [k, x] of Object.entries(v.foods)){
+        const f = Array.isArray(x) ? x.filter(i => DP_FOODS.some(d => d[0] === i)) : [];
+        if(f.length) b.foods[k] = f;
       }
-      if(typeof v.memo === "string") b.memo = v.memo;
+      if(obj(v.my)){
+        for(const k of ["wake","arrival","breakfast","notes"]) if(str(v.my[k])) b.my[k] = v.my[k];
+        if(obj(v.my.gather)) for(const [k, x] of Object.entries(v.my.gather)) if(str(x)) b.my.gather[k] = x;
+        if(Array.isArray(v.my.custom)) b.my.custom = v.my.custom
+          .filter(c => obj(c) && str(c.time) && str(c.text)).slice(0, 30)
+          .map(c => ({id: str(c.id) && c.id ? c.id : dpId(), time: c.time, text: c.text}));
+      }
+      if(str(v.memo)) b.memo = v.memo;
     }
   }catch(_){}
   return b;
 })();
-let DPS_OK = true;
-function dpSave(){ try{ localStorage.setItem(DPS_KEY, JSON.stringify(DPS)); DPS_OK = true; }catch(_){ DPS_OK = false; } }
-// 当日プランの中の操作は、そのままの位置で描き直す（render は先頭に戻すので）
+// 書けない端末（プライベートモード等）では、はじめから「保存できません」と出す
+let DPS_OK = (() => { try{ const k = DPS_KEY + ":t"; localStorage.setItem(k, "1"); localStorage.removeItem(k); return true; }catch(_){ return false; } })();
+const dpSaveText = () => DPS_OK ? "入力・チェックは、この端末（ブラウザ）だけに保存しています。外部には送りません。"
+                                : "この端末では保存できません。閉じる前に、コピーか印刷で残してください。";
+function dpSave(){
+  try{ localStorage.setItem(DPS_KEY, JSON.stringify(DPS)); DPS_OK = true; }catch(_){ DPS_OK = false; }
+  const m = document.getElementById("dpSaveMsg"); if(m) m.textContent = dpSaveText();
+}
+// 選手を替えたときだけ全体を描き直す（位置はそのまま）。ほかの操作は dpRefresh で部分だけ。
 function dpRer(){ dpSave(); const y = window.scrollY; render(); window.scrollTo(0, y); }
 const dpSel = () => DPS.keys.map(k => SWL.find(s => KEY(s) === k)).filter(Boolean);
 function dpPick(k){
-  if(ST.dpAdd){ if(!DPS.keys.includes(k) && DPS.keys.length < 4) DPS.keys.push(k); ST.dpAdd = false; }
+  const keys = dpSel().map(KEY);
+  if(ST.dpAdd){ if(!keys.includes(k) && keys.length < 4) keys.push(k); ST.dpAdd = false; DPS.keys = keys; }
   else DPS.keys = [k];
   ST.q = ""; dpSave(); render();
 }
@@ -1682,10 +1691,11 @@ function dpPlan(list){
   add({id:"my:wake", t:wake, o:0, kind:"mine", label:"起床", src:"自分の入力"});
   add({id:"my:arrival", t:arrival, o:0, kind:"mine", label:"会場到着", note:"集合場所・荷物置き場・トイレを確認。", src:"自分の入力"});
   add({id:"my:breakfast", t:bfIn, o:1, kind:"meal", label:"朝食", note:"食べ慣れた物を、体調に合わせて。", src:"自分の入力"});
-  my.custom.forEach((c, i) => { if(c.text.trim())
-    add({id:"my:c:"+i+":"+c.time+":"+c.text, t:hhmm(c.time), o:0, kind:"mine", label:c.text.trim(), src:"自分の入力"}); });
+  my.custom.forEach(c => { if(c.text.trim())
+    add({id:"my:c:"+c.id, t:hhmm(c.time), o:0, kind:"mine", label:c.text.trim(), src:"自分の入力"}); });
   const warm = hhmm(DP.warmStart), warmEnd = hhmm(DP.warmEnd);
   if(wake != null && arrival != null && arrival < wake) warns.push("会場到着が起床より前になっています。");
+  if(wake != null && bfIn != null && bfIn < wake) warns.push("朝食が起床より前になっています。");
   if(arrival != null && warmEnd != null && arrival > warmEnd)
     warns.push("会場到着が朝のアップの終わり（" + DP.warmEnd + "）より後です。コーチに確認してください。");
 
@@ -1698,12 +1708,19 @@ function dpPlan(list){
     // 着替え・アップ準備は朝の全体アップを使う想定。到着より前には置かない
     const prep = Math.max(arrival ?? 0, Math.min(first - 50, warm ?? (first - 50)));
     const breakfast = bfIn ?? Math.max(wake == null ? 0 : wake + 20, prep - 120);
-    if(bfIn == null) add({id:"bf:"+sk, t:breakfast, o:1, kind:"meal", label:pre+"朝食の目安", note:DP_NOTE.breakfast, src:"目安"});
+    if(bfIn == null) add({id:"bf:"+sk, t:breakfast, o:1, kind:"meal", label:pre + (breakfast >= 600 ? "食事の目安（出発前）" : "朝食の目安"),
+                          note:DP_NOTE.breakfast, src:"目安"});
+    if(wake != null && prep < wake)
+      warns.push(pre + "着替え・アップ準備（" + fmtm(prep) + "）が起床より前です。起床か到着の時刻を見直してください。");
+    else if(breakfast > prep)
+      warns.push(pre + "朝食（" + fmtm(breakfast) + "）が着替え・アップ準備（" + fmtm(prep) + "）より後です。起床・到着の時刻を見直してください。");
+    if(first - breakfast >= 0 && first - breakfast < 120)
+      warns.push(pre + "朝食から最初の出番まで" + (first - breakfast) + "分です。食べる量と時間を調整してください。");
     add({id:"prep:"+sk, t:prep, o:1, kind:"prep", label:pre+"着替え・アップ準備", note:DP_NOTE.prep, src:"目安"});
-    // 昼食：次の集合まで約2時間あくところ。出番の直前にかかるなら、その出番の後ろへずらす
-    let lunch = hhmm(DP.lunchFrom) ?? 690;
+    // 昼食：次の集合まで約2時間あくところ。到着より前には置かず、出番の直前にかかるならその出番の後ろへずらす
+    // （到着で後ろへずらすのを先にしないと、遅く着く日にレース直前の昼食が出る）
+    let lunch = Math.max(hhmm(DP.lunchFrom) ?? 690, arrival ?? 0);
     for(const r of rs){ if(lunch + 120 > gat(r) && lunch < r.t + 20) lunch = r.t + 20; }
-    lunch = Math.max(lunch, arrival ?? 0);
     add({id:"lunch:"+sk, t:lunch, o:1, kind:"meal", label:pre+"昼食の目安", note:DP_NOTE.lunch, src:"目安"});
     let lastFood = breakfast, lastDown = last;
     rs.forEach((r, i) => {
@@ -1746,28 +1763,37 @@ function dpPlan(list){
   all.sort((a,b) => a.t - b.t);
   for(let i = 1; i < all.length; i++){
     const a = all[i-1], b = all[i];
-    if(a.who !== b.who && b.t - a.t < 20)
+    if(a.who !== b.who && b.t - a.t <= 20)
       warns.push(`${a.who}（No.${a.p.no} ${fmtm(a.t)}ごろ）と ${b.who}（No.${b.p.no} ${fmtm(b.t)}ごろ）の出番が${b.t - a.t}分差です。付き添いを確認してください。`);
   }
   items.sort((a,b) => a.t - b.t || a.o - b.o);
-  return {items, warns, n: all.length};
+  return {items, warns: [...new Set(warns)], n: all.length};
 }
 
 const dpTitle = x => x.kind === "race"
   ? (x.who ? x.who + "：" : "") + `No.${x.race.p.no} ${x.race.p.distance||""} ${x.race.p.stroke||""}`.trim()
   : x.label;
-const dpFoodsOf = id => (DPS.foods[id] || []).map(f => DP_FOODS.find(x => x[0] === f)).filter(Boolean);
+const dpFoodsOf = id => (Array.isArray(DPS.foods[id]) ? DPS.foods[id] : []).map(f => DP_FOODS.find(x => x[0] === f)).filter(Boolean);
 
 function dpNext(items){
-  const DP = META.dayPlan || {}, now = dpNow();
+  const DP = META.dayPlan || {}, now = dpNow(), call = DP.callMinutes || 10;
   if(DP.date && now.date > DP.date) return "";
-  const x = items.find(i => !DPS.done[i.id]);
-  if(!x) return `<div class="dpnext" id="dpNext"><div class="nx">✅ 予定はぜんぶ済みました</div></div>`;
+  const open = items.filter(i => !DPS.done[i.id]);
   const today = !DP.date || now.date === DP.date;
-  const lb = !today ? `当日（${esc(DP.dateLabel || DP.date)}）の最初の予定`
-           : x.t < now.t ? "時刻を過ぎた、まだ済んでいない予定" : "次の予定";
-  return `<div class="dpnext" id="dpNext"><span class="lb">${lb}・日本時間</span>
-    <div class="nx"><b>${fmtm(x.t)}</b>${esc(dpTitle(x))}</div>${x.note ? `<div class="tn">${md(x.note)}</div>` : ""}
+  let x, lb;
+  if(!today){ x = open[0]; lb = `当日（${esc(DP.dateLabel || DP.date)}）の最初の予定`; }
+  else{
+    // 過ぎたばかり（15分以内）の招集・レースが済んでいなければ、まずそれ。関係のない朝の予定で止まらないよう、ほかは「いまから先」だけ
+    x = open.filter(i => (i.kind === "call" || i.kind === "race") && i.t < now.t && i.t >= now.t - 15).pop();
+    lb = "時刻を過ぎた予定";
+    if(!x){ x = open.find(i => i.t >= now.t); lb = "次の予定"; }
+  }
+  // その子（たち）の次の出番は、いつも下に添える
+  const nr = items.find(i => i.kind === "race" && i !== x && !DPS.done[i.id] && (!today || i.t >= now.t - 5));
+  const sub = nr ? `<div class="nr">次の出番　<b>${fmtm(nr.t)}ごろ</b> ${esc(dpTitle(nr))}（招集は ${fmtm(nr.t - call)} まで）</div>` : "";
+  if(!x) return `<div class="dpnext"><div class="nx">${open.length ? "今日の予定は、ぜんぶ時刻を過ぎました" : "✅ 予定はぜんぶ済みました"}</div>${sub}</div>`;
+  return `<div class="dpnext"><span class="lb">${lb}・日本時間</span>
+    <div class="nx"><b>${fmtm(x.t)}</b>${esc(dpTitle(x))}</div>${x.note ? `<div class="tn">${md(x.note)}</div>` : ""}${sub}
     <button data-dpdone="${esc(x.id)}">済みました ✓</button></div>`;
 }
 
@@ -1778,9 +1804,8 @@ function dpRow(x){
   if(x.kind === "race"){
     const {e, p, c} = x.race;
     return `<div class="tlr race ${gcls(e.gender)}${done ? " dn" : ""}"><span class="ti">${fmtm(x.t)}</span>
-      ${ck(`No.${p.no} ${esc((p.distance||"") + " " + (p.stroke||""))}`, "")}
-      <div class="sw-r2 sub">${x.who ? `<span class="pill ${gcls(e.gender)}">${esc(x.who)}</span>` : ""}
-        ${p.classGrade ? `<span class="pill">${esc(p.classGrade)}</span>` : ""}<span class="pill">申込 ${esc(showTime(e))}</span>
+      ${ck(esc(dpTitle(x)), "")}
+      <div class="sw-r2 sub">${p.classGrade ? `<span class="pill">${esc(p.classGrade)}</span>` : ""}<span class="pill">申込 ${esc(showTime(e))}</span>
         ${c ? `<span class="pill clk">${META.laneConfirmed ? "" : "予想 "}第${c.heat}組 ${c.lane}レーン</span>` : ""}
         ${p.startTime && hhmm(p.startTime) !== x.t ? `<span class="pill">No.${p.no} 開始 ${esc(p.startTime)}</span>` : ""}</div></div>`;
   }
@@ -1824,16 +1849,26 @@ function viewDp(){
       ${body}`;
   }
 
+  const P = dpParts(sel);
+  DP_LAST = P;
+  if(P.empty) return P.head + P.empty;
+  return DP_REG.map(k => `<div id="dp-${k}">${P[k]}</div>`).join("");
+}
+
+const DP_REG = ["head", "next", "info", "in", "tl", "rest"];
+let DP_LAST = {};
+function dpParts(sel){
+  const DP = META.dayPlan || {};
   const {items, warns, n} = dpPlan(sel);
   const my = DPS.my;
-  const head = `<div class="dpsel">${sel.map(s => `<span class="chip ${gcls(s.gender)}">${esc(s.name)}<small>${esc(s.team)}</small>
+  const head = `<button class="tab dpback" id="dpBack">← ほかの選手を選ぶ</button>
+    <div class="dpsel">${sel.map(s => `<span class="chip ${gcls(s.gender)}">${esc(s.name)}<small>${esc(s.team)}</small>
       <button data-dprm="${esc(KEY(s))}" aria-label="${esc(s.name)}を外す">×</button></span>`).join("")}
       ${sel.length < 4 ? `<button class="dpbtn" id="dpAdd">＋ 兄弟・姉妹</button>` : ""}</div>`;
-  if(!n) return `<button class="tab dpback" id="dpBack">← ほかの選手を選ぶ</button>` + head
-    + `<div class="empty"><span class="e">🫧</span>この選手の個人種目に<br>予定時刻が入っていません</div>`;
+  if(!n) return {head, empty:`<div class="empty"><span class="e">🫧</span>この選手の個人種目に<br>予定時刻が入っていません</div>`};
 
   const races = sel.flatMap(s => dpRaces(s).map(r => ({s, r})));
-  const inputs = dpSec("my", "✏️ 自分で入れる時刻・メモ", `
+  const inp = dpSec("my", "✏️ 自分で入れる時刻・メモ", `
       <div class="dpf">
         <label>起床<input type="time" data-dpmy="wake" value="${tv(my.wake)}"></label>
         <label>会場到着<input type="time" data-dpmy="arrival" value="${tv(my.arrival)}"></label>
@@ -1844,34 +1879,55 @@ function viewDp(){
         return `<label class="dpl">No.${r.p.no} ${esc((r.p.distance||"") + (r.p.stroke||""))}${sel.length > 1 ? "（" + esc(s.name) + "）" : ""}・${fmtm(r.t)}ごろ
           <input type="time" data-dpg="${esc(k)}" value="${tv(my.gather[k])}"></label>`; }).join("")}
       <div class="dph">追加の予定</div>
-      ${my.custom.map((c, i) => `<div class="dpc"><input type="time" data-dpcu="${i}|time" value="${tv(c.time)}" aria-label="時刻">
-          <input type="text" data-dpcu="${i}|text" value="${esc(c.text)}" placeholder="例：チームで集合" aria-label="内容">
-          <button data-dpcx="${i}" aria-label="この予定を消す">×</button></div>`).join("")}
+      ${my.custom.map(c => `<div class="dpc"><input type="time" data-dpcu="${esc(c.id)}|time" value="${tv(c.time)}" aria-label="時刻">
+          <input type="text" data-dpcu="${esc(c.id)}|text" value="${esc(c.text)}" placeholder="例：チームで集合" aria-label="内容">
+          <button data-dpcx="${esc(c.id)}" aria-label="この予定を消す">×</button></div>`).join("")}
       <button class="dpbtn" id="dpCuAdd">＋ 予定を追加</button>
       <label class="dpl" style="margin-top:10px">コーチの指示・メモ
         <textarea data-dpmy="notes" placeholder="例：アップはチーム集合のあと。ゴーグルを2つ持っていく。">${esc(my.notes)}</textarea></label>`);
   const kit = DP.kit || DP_KIT, tips = DP.tips || DP_TIPS;
-  return `<button class="tab dpback" id="dpBack">← ほかの選手を選ぶ</button>` + head + dpNext(items)
-    + (my.notes ? `<div class="note">📝 ${md(my.notes)}</div>` : "")
-    + `<div class="note">${md(DP.caution || "時刻は予定です。進行がずれることがあります。")}</div>`
-    + warns.map(w => `<div class="note dpw">⚠️ ${esc(w)}</div>`).join("")
-    + inputs
-    + `<div class="tl">${items.map(dpRow).join("")}</div>`
-    + `<div class="dpact"><button class="dpbtn" id="dpCopy">📋 予定をコピー</button><button class="dpbtn" id="dpPrint">🖨 印刷・PDF</button></div>`
-    + dpSec("kit", "🎒 持ち物チェック", `<div class="dpkit">${kit.map((k, i) =>
-        `<label><input type="checkbox" data-dpkit="${i}"${DPS.kit[i] ? " checked" : ""}>${esc(k)}</label>`).join("")}</div>
-        <p class="tn">チーム指定の持ち物も確認してください。</p>`)
-    + dpSec("tips", "👪 親子でできる、小さな準備", tips.map(t => `<div class="dph">${esc(t[0])}</div><p class="tn">${esc(t[1])}</p>`).join(""))
-    + dpSec("guide", "📖 食事・水分・アップの考え方", DP_GUIDE.map(g => `<div class="dph">${esc(g[0])}</div><p class="tn">${esc(g[1])}</p>`).join("")
-        + `<div class="dph">参考にした資料</div><ul class="dpref">${DP_REFS.map(r =>
-          `<li><a href="${esc(r[0])}" target="_blank" rel="noopener">${esc(r[1])}</a></li>`).join("")}</ul>
-        <p class="tn">個人が公開資料を参考に作ったヒントで、専門家の監修は受けていません。持病・食物アレルギー・個別の食事や運動の計画は、担当の専門職に相談してください。</p>`)
-    + dpSec("memo", "🗒 次の大会に残すメモ", `<label class="dpl">食べやすかった物・準備でよかったこと
-        <textarea data-dpmemo placeholder="例：ゼリーは食べやすかった。次は集合場所を早めに確認する。">${esc(DPS.memo)}</textarea></label>`)
-    + `<div class="note">${md(DP.mealNote || DP_MEAL_NOTE)}</div>`
-    + `<p class="dpsave">${DPS_OK ? "入力・チェックは、この端末（ブラウザ）だけに保存しています。外部には送りません。"
-                                  : "この端末では保存できません。閉じる前に、コピーか印刷で残してください。"}</p>`;
+  return {
+    head,
+    next: dpNext(items),
+    info: (my.notes ? `<div class="note">📝 ${md(my.notes)}</div>` : "")
+      + `<div class="note">${md(DP.caution || "時刻は予定です。進行がずれることがあります。")}</div>`
+      + warns.map(w => `<div class="note dpw">⚠️ ${esc(w)}</div>`).join(""),
+    in: inp,
+    tl: `<div class="tl">${items.map(dpRow).join("")}</div>`,
+    rest: `<div class="dpact"><button class="dpbtn" id="dpCopy">📋 予定をコピー</button><button class="dpbtn" id="dpPrint">🖨 印刷・PDF</button></div>`
+      + dpSec("kit", "🎒 持ち物チェック", `<div class="dpkit">${kit.map((k, i) =>
+          `<label><input type="checkbox" data-dpkit="${i}"${DPS.kit[i] ? " checked" : ""}>${esc(k)}</label>`).join("")}</div>
+          <p class="tn">チーム指定の持ち物も確認してください。</p>`)
+      + dpSec("tips", "👪 親子でできる、小さな準備", tips.map(t => `<div class="dph">${esc(t[0])}</div><p class="tn">${esc(t[1])}</p>`).join(""))
+      + dpSec("guide", "📖 食事・水分・アップの考え方", DP_GUIDE.map(g => `<div class="dph">${esc(g[0])}</div><p class="tn">${esc(g[1])}</p>`).join("")
+          + `<div class="dph">参考にした資料</div><ul class="dpref">${DP_REFS.map(r =>
+            `<li><a href="${esc(r[0])}" target="_blank" rel="noopener">${esc(r[1])}</a></li>`).join("")}</ul>
+          <p class="tn">個人が公開資料を参考に作ったヒントで、専門家の監修は受けていません。持病・食物アレルギー・個別の食事や運動の計画は、担当の専門職に相談してください。</p>`)
+      + dpSec("memo", "🗒 次の大会に残すメモ", `<label class="dpl">食べやすかった物・準備でよかったこと
+          <textarea data-dpmemo placeholder="例：ゼリーは食べやすかった。次は集合場所を早めに確認する。">${esc(DPS.memo)}</textarea></label>`)
+      + `<div class="note">${md(DP.mealNote || DP_MEAL_NOTE)}</div>`
+      + `<p class="dpsave" id="dpSaveMsg">${dpSaveText()}</p>`
+  };
 }
+/* 部分だけ描き直す。中身が変わった部分だけ入れ替えるので、押そうとしているボタンが消えにくい。
+   skip：入力欄から来た変更では入力欄の部分（in）は触らない（入力中の欄が閉じたり、フォーカスが外れたりしないように）。
+   only：その部分だけ（「次の予定」の1分ごとの更新）。 */
+function dpRefresh(skip, only){
+  clearTimeout(dpRefresh.t);
+  const sel = dpSel();
+  if(ST.tab !== "dp" || ST.dpAdd || !sel.length || !document.getElementById("dp-tl")){ if(!only) dpRer(); return; }
+  const P = dpParts(sel);
+  if(P.empty){ if(!only) dpRer(); return; }
+  for(const k of DP_REG){
+    if(k === skip || (only && k !== only) || P[k] === DP_LAST[k]) continue;
+    const el = document.getElementById("dp-" + k); if(el) el.innerHTML = P[k];
+    DP_LAST[k] = P[k];
+  }
+  dpBind();
+}
+// 入力欄から指を離した（change）直後は、ほかのボタンへのタップが続いていることがある。
+// 状態はすぐ変えて保存し、画面は少し待ってから描き直す（そのタップは古い画面のまま届く）。
+function dpSoon(skip){ clearTimeout(dpRefresh.t); dpRefresh.t = setTimeout(() => dpRefresh(skip), 350); }
 
 function dpCopy(btn){
   const sel = dpSel(), {items, warns} = dpPlan(sel), DP = META.dayPlan || {};
@@ -1896,39 +1952,46 @@ function dpBind(){
   const c = one("#dpCancel"); if(c) c.onclick = () => { ST.dpAdd = false; ST.q = ""; render(); };
   const a = one("#dpAdd"); if(a) a.onclick = () => { ST.dpAdd = true; ST.q = ""; render(); };
   const b = one("#dpBack"); if(b) b.onclick = () => { DPS.keys = []; ST.q = ""; dpSave(); render(); };
-  all("[data-dprm]").forEach(x => x.onclick = () => { DPS.keys = DPS.keys.filter(k => k !== x.dataset.dprm); dpRer(); });
+  all("[data-dprm]").forEach(x => x.onclick = () => { DPS.keys = dpSel().map(KEY).filter(k => k !== x.dataset.dprm); dpRer(); });
   all("[data-dpck]").forEach(x => x.onchange = () => {
-    if(x.checked) DPS.done[x.dataset.dpck] = true; else delete DPS.done[x.dataset.dpck]; dpRer(); });
-  all("[data-dpdone]").forEach(x => x.onclick = () => { DPS.done[x.dataset.dpdone] = true; dpRer(); });
-  all("[data-dpmy]").forEach(x => x.onchange = () => { DPS.my[x.dataset.dpmy] = x.value; dpRer(); });
+    if(x.checked) DPS.done[x.dataset.dpck] = true; else delete DPS.done[x.dataset.dpck]; dpSave(); dpRefresh(); });
+  all("[data-dpdone]").forEach(x => x.onclick = () => { DPS.done[x.dataset.dpdone] = true; dpSave(); dpRefresh(); });
+  // 時刻：決まったら（change）保存して、入力欄以外を描き直す
+  all('[data-dpmy]:not(textarea)').forEach(x => x.onchange = () => { DPS.my[x.dataset.dpmy] = x.value; dpSave(); dpSoon("in"); });
   all("[data-dpg]").forEach(x => x.onchange = () => {
-    if(x.value) DPS.my.gather[x.dataset.dpg] = x.value; else delete DPS.my.gather[x.dataset.dpg]; dpRer(); });
-  all("[data-dpcu]").forEach(x => x.onchange = () => {
-    const [i, f] = x.dataset.dpcu.split("|"), c = DPS.my.custom[+i]; if(c){ c[f] = x.value; dpRer(); } });
-  all("[data-dpcx]").forEach(x => x.onclick = () => { DPS.my.custom.splice(+x.dataset.dpcx, 1); dpRer(); });
-  const ca = one("#dpCuAdd"); if(ca) ca.onclick = () => { DPS.my.custom.push({time:"", text:""}); dpRer(); };
-  all("[data-dpfo]").forEach(x => x.onclick = () => { ST.dpFood = ST.dpFood === x.dataset.dpfo ? null : x.dataset.dpfo; dpRer(); });
+    if(x.value) DPS.my.gather[x.dataset.dpg] = x.value; else delete DPS.my.gather[x.dataset.dpg]; dpSave(); dpSoon("in"); });
+  // 文字：打つたびに保存（閉じても消えない）。予定表への反映は指を離したとき
+  const cu = x => DPS.my.custom.find(c => c.id === x.dataset.dpcu.split("|")[0]);
+  all("[data-dpcu]").forEach(x => {
+    const f = x.dataset.dpcu.split("|")[1];
+    if(f === "text") x.oninput = () => { const c = cu(x); if(c){ c.text = x.value; dpSave(); } };
+    x.onchange = () => { const c = cu(x); if(c){ c[f] = x.value; dpSave(); dpSoon("in"); } };
+  });
+  all("textarea[data-dpmy]").forEach(x => {
+    x.oninput = () => { DPS.my[x.dataset.dpmy] = x.value; dpSave(); };
+    x.onchange = () => { DPS.my[x.dataset.dpmy] = x.value; dpSave(); dpSoon("in"); };
+  });
+  all("[data-dpcx]").forEach(x => x.onclick = () => {
+    DPS.my.custom = DPS.my.custom.filter(c => c.id !== x.dataset.dpcx); delete DPS.done["my:c:" + x.dataset.dpcx];
+    dpSave(); dpRefresh(); });
+  const ca = one("#dpCuAdd"); if(ca) ca.onclick = () => {
+    const id = dpId(); DPS.my.custom.push({id, time:"", text:""}); ST.dpSec.add("my"); dpSave(); dpRefresh();
+    const n = M.querySelector(`[data-dpcu="${id}|time"]`); if(n) n.focus(); };
+  all("[data-dpfo]").forEach(x => x.onclick = () => { ST.dpFood = ST.dpFood === x.dataset.dpfo ? null : x.dataset.dpfo; dpRefresh(); });
   all("[data-dpfd]").forEach(x => x.onclick = () => {
-    const [id, f] = x.dataset.dpfd.split("|"), s = new Set(DPS.foods[id] || []);
+    const [id, f] = x.dataset.dpfd.split("|"), s = new Set(Array.isArray(DPS.foods[id]) ? DPS.foods[id] : []);
     if(s.has(f)) s.delete(f); else s.add(f);
-    if(s.size) DPS.foods[id] = [...s]; else delete DPS.foods[id]; dpRer(); });
+    if(s.size) DPS.foods[id] = [...s]; else delete DPS.foods[id]; dpSave(); dpRefresh(); });
   all("[data-dpkit]").forEach(x => x.onchange = () => {
     if(x.checked) DPS.kit[x.dataset.dpkit] = true; else delete DPS.kit[x.dataset.dpkit]; dpSave(); });
-  const mm = one("[data-dpmemo]"); if(mm) mm.onchange = () => { DPS.memo = mm.value; dpSave(); };
+  const mm = one("[data-dpmemo]"); if(mm) mm.oninput = () => { DPS.memo = mm.value; dpSave(); };
   all("details[data-dpsec]").forEach(d => d.ontoggle = () => {
     if(d.open) ST.dpSec.add(d.dataset.dpsec); else ST.dpSec.delete(d.dataset.dpsec); });
   const cp = one("#dpCopy"); if(cp) cp.onclick = () => dpCopy(cp);
   const pr = one("#dpPrint"); if(pr) pr.onclick = () => window.print();
 }
-// 「次の予定」は時刻で変わるので、当日プランを開いている間は1分ごとにカードだけ描き直す
-setInterval(() => {
-  if(ST.tab !== "dp" || ST.dpAdd) return;
-  const el = document.getElementById("dpNext"), sel = dpSel(); if(!el || !sel.length) return;
-  const tmp = document.createElement("div"); tmp.innerHTML = dpNext(dpPlan(sel).items);
-  const nn = tmp.firstElementChild; if(!nn) return;
-  el.replaceWith(nn);
-  const b = nn.querySelector("[data-dpdone]"); if(b) b.onclick = () => { DPS.done[b.dataset.dpdone] = true; dpRer(); };
-}, 60000);
+// 「次の予定」は時刻で変わるので、当日プランを開いている間は1分ごとにその部分だけ描き直す
+setInterval(() => { if(ST.tab === "dp" && !ST.dpAdd && document.getElementById("dp-next")) dpRefresh(null, "next"); }, 60000);
 
 // **強調** だけ通す最小マークダウン（それ以外はエスケープ）
 /* 注意書き用のごく小さな記法。**太字** と改行だけ。HTMLタグは書けない（そのまま文字として出る）。 */
@@ -1997,7 +2060,7 @@ function bind(){
 }
 function redrawKeepFocus(pos){
   CH_ROWS.length = 0;
-  M.innerHTML = (ST.tab === "dp" ? viewDp : viewSw)(); bind();
+  M.innerHTML = (ST.tab === "dp" ? viewDp : viewSw)(); bind(); footer(); count();
   const q = M.querySelector("#q");
   if(q){ q.focus(); try{ q.setSelectionRange(pos,pos); }catch(_){} }
 }
@@ -2018,10 +2081,14 @@ const _render = render;
 render = function(){ _render(); footer(); count(); };
 
 /* ---------- 閲覧カウンター（meta.counter.ns があるときだけ） ---------- */
-let counted = false;
+let counted = false, ctVal = null, ctBusy = false;
+const ctShow = () => { const el = document.getElementById("ct"); if(el && ctVal != null) el.textContent = "👀 " + ctVal + " 回閲覧"; };
 function count(){
   const el = document.getElementById("ct");
   if(!el || !META.counter?.ns) return;
+  // 数は1回取れば十分。タブを替えるたび・描き直すたびに問い合わせない（取れたら覚えておいて出すだけ）
+  if(ctVal != null || ctBusy){ ctShow(); return; }
+  ctBusy = true;
   const NS = META.counter.ns, K = "cnt:" + NS, today = new Date().toISOString().slice(0,10);
   // localStorage が使えない環境（プライベートモード等）でも落とさない
   let hit = true;
@@ -2030,10 +2097,11 @@ function count(){
   if(hit) { try { localStorage.setItem(K, today); } catch(_){} counted = true; }
   // キーがまだ無いと {"error":...} が返る。数が来たときだけ出す（「undefined 回閲覧」を出さない）。
   fetch(url).then(r=>r.json())
-    .then(d=>{ if(typeof d?.value === "number") el.textContent = "👀 " + d.value + " 回閲覧";
+    .then(d=>{ if(typeof d?.value === "number"){ ctVal = d.value; ctShow(); }
                else if(url.indexOf("/get/") > 0) return fetch(url.replace("/get/","/hit/")).then(r=>r.json())
-                        .then(d2=>{ if(typeof d2?.value === "number") el.textContent = "👀 " + d2.value + " 回閲覧"; }); })
-    .catch(()=>{});
+                        .then(d2=>{ if(typeof d2?.value === "number"){ ctVal = d2.value; ctShow(); } }); })
+    .catch(()=>{})
+    .finally(()=>{ ctBusy = false; });
 }
 
 render();
