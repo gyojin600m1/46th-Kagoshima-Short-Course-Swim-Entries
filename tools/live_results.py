@@ -246,6 +246,8 @@ def main():
         top = sorted([e for e in ent + relays if last in (e.get('programNos') or []) and (e.get('result') or {}).get('rank') == 1],
                      key=lambda e: e.get('name') or e.get('team') or '')
         line = '　'.join(f"🥇 {e.get('name') or e.get('team')} {e['result']['time']}" for e in top)
+        if len(fin_nos) == len(nos) and meta.get('liveWatch'):
+            meta['liveWatch'] = False; changed += 1     # 全部終わったら、見ている画面の見回りも止める
         if len(fin_nos) == len(nos):
             note = (f"🏁 **全{len(nos)}競技 終了**　記録 {n_time}件" + (f"・失格/棄権 {n_note}件" if n_note else '')
                     + '\n' + base)
