@@ -1,0 +1,113 @@
+name: 速報を自動で取り込む（11/1 県短水路記録会）
+
+# 大会当日（11/1）、日水連 Live Results を40秒おきに見て、結果が増えていたら
+# index.html と live.json を更新して main と gh-pages（公開に使っているブランチ）に push する。
+# 中身は tools/live_results.py（9/13 小学生学年別の見張りと同じ取り方）。
+#
+# GitHub の定時実行（cron）は何時間も遅れることがあるので頼り切らない。
+# 1回の実行を最長5時間50分にして、終わるときに次の実行を自分で予約してつなぐ（九州ジュニアと同じ）。
+# cron は鎖が切れたときの再始動用。
+#   ・今すぐ動かしたい／止まっていそう … Actions → この workflow → Run workflow（空欄のまま）
+#   ・公開ページに届くかだけ確かめる   … Run workflow で「動作確認だけ」にチェック
+#   ・止めたい                       … 実行中のものを Cancel し、この workflow を Disable workflow
+on:
+  schedule:
+    - cron: "40 22 31 10 *"      # 日本時間 11/1 7:40
+    - cron: "*/30 23 31 10 *"    # 日本時間 11/1 8:00・8:30
+    - cron: "*/30 0-8 1 11 *"    # 日本時間 11/1 9:00〜17:30
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "何分見張りますか（空なら大会終了まで続ける。1なら1回だけ取り込んで終わる）"
+        required: false
+        default: ""
+      ping:
+        description: "動作確認だけ（live.json の時刻を書き換えて push し、公開ページに届くか確かめる）"
+        type: boolean
+        default: false
+
+concurrency:
+  group: live-results
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write     # 次の実行を自分で予約する
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 速報を見張る
+        env:
+          MINUTES: ${{ inputs.minutes }}
+          PING: ${{ inputs.ping }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e -u          # 「変更なし」や通信エラーでも止めずに次の回へ
+          git config user.name "live-results-bot"
+          git config user.email "actions@users.noreply.github.com"
+          LAST_PUSH=0
+          HALTED=0
+
+          push() {
+            git add index.html live.json
+            git commit -q -m "$1" || return 0
+            if git push -q origin HEAD:main && git push -q -f origin HEAD:gh-pages; then
+              LAST_PUSH=$(date +%s)
+              echo "push しました: $(TZ=Asia/Tokyo date '+%H:%M:%S')"
+              echo "- $(TZ=Asia/Tokyo date '+%H:%M') $1" >> "$GITHUB_STEP_SUMMARY"
+            else
+              # 人が main を直した直後など。最新に合わせ、次の回で全部の組を取り直す
+              echo "push できなかったので、最新を取り直して次の回でやり直します"
+              git fetch -q origin main && git reset -q --hard origin/main
+              rm -f tools/.live_state.json
+            fi
+          }
+
+          if [ "${PING:-false}" = "true" ]; then
+            printf '{"n": 0, "t": "確認 %s"}\n' "$(TZ=Asia/Tokyo date '+%-m/%-d %H:%M')" > live.json
+            push "速報の見張り：動作確認（$(TZ=Asia/Tokyo date '+%-m/%-d %H:%M')）"
+            exit 0
+          fi
+
+          START=$(TZ=Asia/Tokyo date -d "2026-11-01 07:30" +%s)
+          MEET_END=$(TZ=Asia/Tokyo date -d "2026-11-01 17:30" +%s)
+          if [ -n "${MINUTES:-}" ]; then
+            END=$(( $(date +%s) + MINUTES * 60 )); CHAIN=0
+          else
+            END=$(( $(date +%s) + 350 * 60 )); CHAIN=1
+            [ "$END" -gt "$MEET_END" ] && END=$MEET_END
+          fi
+          echo "見張り: $(TZ=Asia/Tokyo date -d @$END '+%-m/%-d %H:%M') まで"
+
+          while [ "$(date +%s)" -lt "$END" ]; do
+            if [ -z "${MINUTES:-}" ] && [ "$(date +%s)" -lt "$START" ]; then
+              sleep 300; continue                  # 大会の朝 7:30 までは待つだけ
+            fi
+            # 手元に未 push の変更が無ければ、最新の main に合わせる（人が直した分を取り込む）
+            if git diff --quiet; then
+              git fetch -q origin main && git reset -q --hard origin/main
+            fi
+            OUT=$(python3 tools/live_results.py 2>&1); RC=$?
+            echo "$(TZ=Asia/Tokyo date +%H:%M:%S) [$RC] $OUT"
+            if [ "$RC" = 4 ]; then
+              HALTED=1
+              echo "- 停止: $OUT" >> "$GITHUB_STEP_SUMMARY"
+              break
+            fi
+            if ! git diff --quiet && [ $(( $(date +%s) - LAST_PUSH )) -ge 45 ]; then
+              push "速報を反映（$(TZ=Asia/Tokyo date '+%-m/%-d %H:%M')）"
+            fi
+            if [ "$RC" = 5 ] || [ "$(TZ=Asia/Tokyo date +%H%M)" -lt 0915 ]; then sleep 120; else sleep 40; fi
+          done
+          if ! git diff --quiet; then push "速報を反映（$(TZ=Asia/Tokyo date '+%-m/%-d %H:%M')）"; fi
+
+          # 大会が終わっていなければ、次の実行を予約してつなぐ
+          if [ "$CHAIN" = 1 ] && [ "$HALTED" = 0 ] && [ "$(date +%s)" -lt "$MEET_END" ]; then
+            gh workflow run live-results.yml --repo "$GITHUB_REPOSITORY" --ref main \
+              && echo "次の実行を予約しました"
+          fi
